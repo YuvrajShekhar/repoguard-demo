@@ -86,10 +86,14 @@ jobs:
           path: repoguard-report.json
           retention-days: 30
 
-      - name: Scan changed files
+      - name: Determine changed files (pull request)
         if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          python scripts/ci_scan.py \
-            --files-from changed.txt \
-            --exclude 'scripts/*' \
-            --report repoguard-report.json
+          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA" || true
+          git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" > changed.txt
+          echo "Changed files:"
+          cat changed.txt
+          test -s changed.txt || echo "(no files changed)"
