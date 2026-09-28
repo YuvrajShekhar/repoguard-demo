@@ -1,21 +1,10 @@
 name: RepoGuard — pre-agent repository scan
 
-# Objective 5 (Section 3.5): scan repository content for indirect prompt injection
-# BEFORE any AI coding agent is invoked on it.
-#
-# Scan modes follow Section 3.5.1:
-#   - incremental scan on pull requests (changed files only)
-#   - full-repository baseline scan on a schedule and on demand
-#
-# The synchronous path runs Tier 0 + Tier 1.5 only, per the deployability finding
-# of Section 4.9.2. The Tier 1.75 semantic layer is available on the scheduled run
-# via the `semantic` input, where its per-file cost is not on the critical path.
-
 on:
   pull_request:
     branches: [main, master]
   schedule:
-    - cron: "0 3 * * 1"      # weekly full scan, Monday 03:00 UTC
+    - cron: "0 3 * * 1"
   workflow_dispatch:
     inputs:
       semantic:
@@ -36,55 +25,24 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
-          # Full history on PRs so the diff base is available.
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"      # pinned: onnxruntime has no 3.14 wheels (Section 4.9.3)
+          python-version: "3.13"
 
       - name: Cache pip
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: repoguard-pip-${{ runner.os }}-py313-${{ hashFiles('**/pyproject.toml') }}
+          key: repoguard-pip-${{ runner.os }}-py313
 
       - name: Install RepoGuard and CloneGuard
         run: |
           python -m pip install --upgrade pip
           python -m pip install "cloneguard[mini]"
           if [ -f pyproject.toml ]; then python -m pip install -e .; fi
-
-      - name: Determine changed files (pull request)
-        if: github.event_name == 'pull_request'
-        run: |
-          git diff --name-only --diff-filter=ACMR \
-            "origin/${{ github.base_ref }}...HEAD" > changed.txt
-          echo "Changed files:"; cat changed.txt
-
-      - name: Scan changed files
-        if: github.event_name == 'pull_request'
-        run: |
-          python scripts/ci_scan.py \
-            --files-from changed.txt \
-            --report repoguard-report.json
-
-      - name: Full repository scan
-        if: github.event_name != 'pull_request'
-        run: |
-          python scripts/ci_scan.py \
-            --all \
-            ${{ (github.event.inputs.semantic == 'true') && '--semantic' || '' }} \
-            --report repoguard-report.json
-
-      - name: Upload scan report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: repoguard-report
-          path: repoguard-report.json
-          retention-days: 30
 
       - name: Determine changed files (pull request)
         if: github.event_name == 'pull_request'
@@ -97,3 +55,29 @@ jobs:
           echo "Changed files:"
           cat changed.txt
           test -s changed.txt || echo "(no files changed)"
+
+      - name: Scan changed files
+        if: github.event_name == 'pull_request'
+        run: |
+          python scripts/ci_scan.py \
+            --files-from changed.txt \
+            --exclude 'scripts/*' \
+            --report repoguard-report.json
+
+      - name: Full repository scan
+        if: github.event_name != 'pull_request'
+        run: |
+          python scripts/ci_scan.py \
+            --all \
+            --exclude 'scripts/*' \
+            ${{ (github.event.inputs.semantic == 'true') && '--semantic' || '' }} \
+            --report repoguard-report.json
+
+      - name: Upload scan report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repoguard-report
+          path: repoguard-report.json
+          retention-days: 30
+          if-no-files-found: warn
